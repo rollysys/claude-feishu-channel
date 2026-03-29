@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "feishu": {
+      "command": "npx",
+      "args": ["tsx", "server.ts"],
+      "env": {
+        "FEISHU_APP_ID": "",
+        "FEISHU_APP_SECRET": ""
+      }
+    }
+  }
+}
