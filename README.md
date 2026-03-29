@@ -27,7 +27,7 @@ Feishu User ──WebSocket──▶ MCP Server ──stdio──▶ Claude Code
 1. Clone the repo:
 
 ```bash
-git clone https://github.com/nicepkg/claude-feishu-channel.git
+git clone https://github.com/rollysys/claude-feishu-channel.git
 cd claude-feishu-channel
 npm install
 ```
