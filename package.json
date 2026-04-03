@@ -1,10 +1,12 @@
 {
   "name": "claude-feishu-channel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Feishu/Lark channel plugin for Claude Code — chat with Claude directly from Feishu",
   "type": "module",
   "scripts": {
-    "start": "tsx server.ts"
+    "start": "tsx server.ts",
+    "hub": "tsx hub.ts",
+    "bridge": "tsx bridge.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.60.0",
