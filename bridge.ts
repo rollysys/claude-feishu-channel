@@ -83,7 +83,14 @@ const server = new Server(
     },
     instructions: `You have a Feishu (飞书) channel connected. When you see a <channel source="feishu"> tag, it contains a message from a Feishu user.
 
-To reply to the user, call the feishu_reply tool with the chat_id and your message text. Always reply in the same language the user used.
+To reply to the user, call the feishu_reply tool. Parameters:
+  - chat_id (required): from the <channel> tag
+  - text (required): reply content, supports markdown
+  - message_id (optional): om_xxx, to reply in thread
+
+⚠️ MUST use "text" parameter — NOT "message" or "content".
+
+Always reply in the same language the user used.
 
 If the user asks you to perform Feishu operations (send messages to others, check calendar, create docs, manage tasks, etc.), you can use lark-cli commands via the Bash tool — lark-cli is already configured.`,
   },
@@ -107,17 +114,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
+// ─── Markdown table → Feishu card conversion ─────────────────────────────────
+
+import { parseMarkdownSegments, hasMarkdownTable, buildCardJson } from './markdown-utils.js';
+
+// ─── MCP tool handler ─────────────────────────────────────────────────────────
+
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === 'feishu_reply') {
     const { chat_id, message_id, text } = req.params.arguments as {
       chat_id: string; message_id?: string; text: string;
     };
     const msgId = message_id || latestMessageIds.get(chat_id);
-    const encodedText = Buffer.from(text).toString('base64');
+    log('reply text preview:', text.slice(0, 300).replace(/\n/g, '\\n'));
+    log('has table:', hasMarkdownTable(text));
     try {
-      const args = msgId
-        ? ['im', '+messages-reply', '--as', 'bot', '--message-id', msgId, '--markdown-base64', encodedText]
-        : ['im', '+messages-send', '--as', 'bot', '--chat-id', chat_id, '--markdown-base64', encodedText];
+      let args: string[];
+      if (hasMarkdownTable(text)) {
+        // Card mode: native table rendering
+        const cardJson = buildCardJson(parseMarkdownSegments(text));
+        args = msgId
+          ? ['im', '+messages-reply', '--as', 'bot', '--message-id', msgId, '--msg-type', 'interactive', '--content', cardJson]
+          : ['im', '+messages-send', '--as', 'bot', '--chat-id', chat_id, '--msg-type', 'interactive', '--content', cardJson];
+        log('sending card with table to', chat_id);
+      } else {
+        // Regular markdown mode
+        const encodedText = Buffer.from(text).toString('base64');
+        args = msgId
+          ? ['im', '+messages-reply', '--as', 'bot', '--message-id', msgId, '--markdown-base64', encodedText]
+          : ['im', '+messages-send', '--as', 'bot', '--chat-id', chat_id, '--markdown-base64', encodedText];
+      }
       execFileSync(LARK_CLI, args, { encoding: 'utf-8', timeout: 15000, env: cliEnv });
       log('reply sent to', chat_id, msgId ? `(reply to ${msgId})` : '(new message)');
       return { content: [{ type: 'text', text: `Reply sent to ${chat_id}` }] };
@@ -257,6 +283,10 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log('MCP bridge started, app:', APP_ID);
+
+  // Exit when parent disconnects (stdin closes) — prevents zombie processes
+  process.stdin.on('end', () => { log('stdin closed, exiting'); process.exit(0); });
+  process.stdin.on('error', () => { process.exit(0); });
 
   connectWithRetry().catch(e => log('Fatal hub error:', e));
 }
