@@ -2,38 +2,17 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) channel plugin that bridges Feishu/Lark messages into your Claude Code session via MCP.
 
-Chat with Claude directly from Feishu — messages are relayed in real-time over WebSocket.
-
-## Modes
-
-### Standalone (simple, single session)
-
-Each Claude Code session runs its own MCP server with a dedicated Feishu WebSocket connection.
+Chat with Claude directly from Feishu — messages are relayed in real-time over WebSocket using the official `@larksuiteoapi/node-sdk`.
 
 ```
-Feishu ──WebSocket──▶ server.ts (stdio MCP) ──▶ Claude Code
+Feishu ──WebSocket──▶ feishu-mcp.ts (stdio MCP) ──▶ Claude Code
                            ◀──feishu_reply──
-```
-
-### Hub + Bridge (recommended, multi-session)
-
-A single hub process holds all Feishu WebSocket connections and broadcasts messages to lightweight bridge processes — one per Claude Code session. Updating hub logic only requires restarting the hub, not any Claude session.
-
-```
-Feishu ──WebSocket──▶ hub.ts (HTTP, one per machine)
-                           │ SSE broadcast
-                    ┌──────┴──────┐
-               bridge.ts      bridge.ts   …
-            (stdio MCP)    (stdio MCP)
-                 │               │
-           Claude Code     Claude Code
 ```
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) >= 22
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
-- [lark-cli](https://github.com/nicepkg/larksuite-cli) installed and configured
 - A Feishu bot app with **WebSocket** mode enabled on [Feishu Open Platform](https://open.feishu.cn)
 
 ## Installation
@@ -50,18 +29,24 @@ npm install
 2. Enable the **Bot** capability.
 3. Under **Event Subscriptions** → select **WebSocket** mode (长连接).
 4. Subscribe to `im.message.receive_v1`.
-5. Grant scopes: `im:message`, `im:message.group_at_msg`, `im:message.p2p_msg`.
+5. Grant scopes: `im:message`, `im:message.group_at_msg`, `im:message.p2p_msg`, `im:resource` (for file/image download), `im:message.reaction` (for ACK reaction).
 
-## Usage — Standalone Mode
+## Usage
 
-Add to your project's `.mcp.json`:
+Copy the example config and fill in your app credentials:
+
+```bash
+cp .mcp.json.example .mcp.json
+```
+
+`.mcp.json` (gitignored — keep your secrets local):
 
 ```json
 {
   "mcpServers": {
     "feishu": {
       "command": "npx",
-      "args": ["tsx", "/path/to/claude-feishu-channel/server.ts"],
+      "args": ["tsx", "/path/to/claude-feishu-channel/feishu-mcp.ts"],
       "env": {
         "FEISHU_APP_ID": "cli_xxx",
         "FEISHU_APP_SECRET": "your_secret"
@@ -77,72 +62,25 @@ Start Claude Code with channel support:
 claude --dangerously-load-development-channels server:feishu
 ```
 
-## Usage — Hub + Bridge Mode
-
-### 1. Start the hub (once per machine)
-
-```bash
-npm run hub
-# or: npx tsx hub.ts
-```
-
-The hub listens on `http://127.0.0.1:3001` by default. Set `PORT` to change it.
-
-For persistent operation, install as a launchd service (macOS):
-
-```xml
-<!-- ~/Library/LaunchAgents/com.claude.feishu-hub.plist -->
-<key>ProgramArguments</key>
-<array>
-  <string>/opt/homebrew/bin/node</string>
-  <string>/path/to/claude-feishu-channel/node_modules/.bin/tsx</string>
-  <string>/path/to/claude-feishu-channel/hub.ts</string>
-</array>
-<key>RunAtLoad</key><true/>
-<key>KeepAlive</key><true/>
-```
-
-### 2. Configure each project's `.mcp.json`
-
-```json
-{
-  "mcpServers": {
-    "feishu": {
-      "command": "npx",
-      "args": ["tsx", "/path/to/claude-feishu-channel/bridge.ts"],
-      "env": {
-        "FEISHU_APP_ID": "cli_xxx",
-        "FEISHU_APP_SECRET": "your_secret",
-        "FEISHU_HUB_URL": "http://localhost:3001"
-      }
-    }
-  }
-}
-```
-
-Each project can use a different bot (different `FEISHU_APP_ID`). The hub starts a new Feishu WebSocket connection automatically on first bridge connection for that app.
-
-### 3. Start Claude Code
-
-```bash
-claude --dangerously-load-development-channels server:feishu
-```
-
 ## Environment Variables
 
-| Variable | Applies to | Default | Description |
-|----------|-----------|---------|-------------|
-| `FEISHU_APP_ID` | server, bridge | — | Feishu app ID |
-| `FEISHU_APP_SECRET` | server, bridge | — | Feishu app secret |
-| `FEISHU_HUB_URL` | bridge | `http://localhost:3001` | Hub base URL |
-| `PORT` | hub | `3001` | Hub listen port |
-| `LARK_CLI_PATH` | server, bridge | `lark-cli` | Path to lark-cli binary |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FEISHU_APP_ID` | yes | Feishu app ID (`cli_xxx`) |
+| `FEISHU_APP_SECRET` | yes | Feishu app secret |
+| `FEISHU_MCP_LOG` | no | Path to write logs to (default: stderr only) |
 
 ## How it works
 
-When a Feishu user sends a message to the bot, the server (or hub) receives it via WebSocket, parses the content, replaces `@mention` placeholders with display names, and pushes it into Claude Code as a `<channel source="feishu">` event. Claude then replies using the `feishu_reply` MCP tool, which calls `lark-cli` to send the response back to Feishu.
+When a Feishu user sends a message to the bot, `feishu-mcp.ts` receives it via WebSocket, converts the content (text / rich post / image / file / audio / video / sticker) to markdown, downloads attached resources to `~/.claude/channels/feishu/downloads/`, and pushes it into Claude Code as a `<channel source="feishu">` event. Claude then replies using the `feishu_reply` MCP tool — markdown tables are rendered as Feishu interactive cards, other replies as rich-text posts.
 
-In hub mode, messages are broadcast to all Claude sessions connected to the same bot simultaneously.
+All Feishu API calls go through the official `@larksuiteoapi/node-sdk` — no external CLI dependency.
+
+## Testing
+
+```bash
+npm test   # runs unit tests for markdown-utils.ts
+```
 
 ## License
 

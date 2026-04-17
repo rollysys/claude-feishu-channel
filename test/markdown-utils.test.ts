@@ -1,10 +1,10 @@
 /**
- * Unit tests for bridge.ts markdown utilities.
- * Run: npx tsx test/bridge.test.ts
+ * Unit tests for markdown-utils.ts.
+ * Run: npx tsx test/markdown-utils.test.ts
  */
 
 import assert from 'node:assert/strict';
-import { parseRow, parseMarkdownSegments, hasMarkdownTable, buildCardJson } from '../markdown-utils.js';
+import { parseRow, parseMarkdownSegments, hasMarkdownTable, buildCardJson, normalizeTaskList } from '../markdown-utils.js';
 
 // ─── parseRow ────────────────────────────────────────────────────────────────
 
@@ -140,12 +140,61 @@ function testNoFalsePositives() {
   console.log('  ✓ no false positives');
 }
 
+// ─── normalizeTaskList ───────────────────────────────────────────────────────
+
+function testNormalizeTaskList() {
+  // Unchecked → ☐
+  assert.equal(normalizeTaskList('- [ ] todo'), '☐ todo');
+  // Checked → ✅ (both lowercase and uppercase x)
+  assert.equal(normalizeTaskList('- [x] done'), '✅ done');
+  assert.equal(normalizeTaskList('- [X] DONE'), '✅ DONE');
+
+  // Different list markers
+  assert.equal(normalizeTaskList('* [ ] a'), '☐ a');
+  assert.equal(normalizeTaskList('+ [x] b'), '✅ b');
+
+  // Indentation is preserved
+  assert.equal(normalizeTaskList('  - [ ] nested'), '  ☐ nested');
+  assert.equal(normalizeTaskList('    - [x] deep'), '    ✅ deep');
+
+  // Multiline
+  const multi = normalizeTaskList('- [x] a\n- [ ] b\n- [x] c');
+  assert.equal(multi, '✅ a\n☐ b\n✅ c');
+
+  // Non-task bullets untouched
+  assert.equal(normalizeTaskList('- plain item\n- [ ] task'), '- plain item\n☐ task');
+
+  // Inline `[ ]` (not at start of list item) untouched
+  assert.equal(normalizeTaskList('text [ ] not a task'), 'text [ ] not a task');
+
+  // Empty / no matches
+  assert.equal(normalizeTaskList(''), '');
+  assert.equal(normalizeTaskList('plain text'), 'plain text');
+
+  console.log('  ✓ normalizeTaskList');
+}
+
+// Card markdown segments should also be normalized
+function testBuildCardJsonNormalizesTaskList() {
+  const card = JSON.parse(buildCardJson([
+    { type: 'text', content: '## 待办\n- [x] 已完成\n- [ ] 未完成' },
+  ]));
+  assert.equal(card.elements[0].tag, 'markdown');
+  assert.ok(card.elements[0].content.includes('✅ 已完成'));
+  assert.ok(card.elements[0].content.includes('☐ 未完成'));
+  assert.ok(!card.elements[0].content.includes('- [x]'));
+  assert.ok(!card.elements[0].content.includes('- [ ]'));
+  console.log('  ✓ buildCardJson normalizes task lists');
+}
+
 // ─── Run all ─────────────────────────────────────────────────────────────────
 
-console.log('\nbridge.ts markdown utilities:');
+console.log('\nmarkdown-utils:');
 testParseRow();
 testHasMarkdownTable();
 testParseMarkdownSegments();
 testBuildCardJson();
 testNoFalsePositives();
+testNormalizeTaskList();
+testBuildCardJsonNormalizesTaskList();
 console.log('All tests passed.\n');

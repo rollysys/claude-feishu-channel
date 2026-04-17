@@ -10,5 +10,5 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["server.ts"]
+  "include": ["feishu-mcp.ts", "markdown-utils.ts"]
 }

@@ -11,6 +11,13 @@ export function parseRow(line: string): string[] {
   return line.split('|').map(c => c.trim()).filter(c => c.length > 0);
 }
 
+// Feishu markdown (both post `tag:md` and card `tag:markdown`) does not render
+// GFM task list syntax. Rewrite to unicode symbols so users see checkboxes.
+export function normalizeTaskList(text: string): string {
+  return text.replace(/^(\s*)[-*+]\s+\[([ xX])\]\s+/gm,
+    (_m, indent: string, mark: string) => `${indent}${mark === ' ' ? '☐' : '✅'} `);
+}
+
 export function parseMarkdownSegments(text: string): Segment[] {
   const lines = text.split('\n');
   const segments: Segment[] = [];
@@ -52,7 +59,7 @@ export function buildCardJson(segments: Segment[]): string {
   const elements: Record<string, unknown>[] = [];
   for (const seg of segments) {
     if (seg.type === 'text') {
-      const trimmed = seg.content.trim();
+      const trimmed = normalizeTaskList(seg.content).trim();
       if (trimmed) {
         elements.push({ tag: 'markdown', content: trimmed });
       }

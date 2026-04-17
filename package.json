@@ -4,10 +4,8 @@
   "description": "Feishu/Lark channel plugin for Claude Code — chat with Claude directly from Feishu",
   "type": "module",
   "scripts": {
-    "start": "tsx server.ts",
-    "hub": "tsx hub.ts",
-    "bridge": "tsx bridge.ts",
-    "test": "tsx test/bridge.test.ts"
+    "start": "tsx feishu-mcp.ts",
+    "test": "tsx test/markdown-utils.test.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.60.0",
