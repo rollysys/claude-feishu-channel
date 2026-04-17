@@ -7,6 +7,12 @@ export type Segment =
   | { type: 'text'; content: string }
   | { type: 'table'; headers: string[]; rows: string[][] };
 
+export interface Button {
+  label: string;
+  value: string;
+  style?: 'primary' | 'default' | 'danger';
+}
+
 export function parseRow(line: string): string[] {
   return line.split('|').map(c => c.trim()).filter(c => c.length > 0);
 }
@@ -55,7 +61,7 @@ export function hasMarkdownTable(text: string): boolean {
   return parseMarkdownSegments(text).some(s => s.type === 'table');
 }
 
-export function buildCardJson(segments: Segment[]): string {
+export function buildCardJson(segments: Segment[], buttons?: Button[]): string {
   const elements: Record<string, unknown>[] = [];
   for (const seg of segments) {
     if (seg.type === 'text') {
@@ -83,6 +89,19 @@ export function buildCardJson(segments: Segment[]): string {
         }),
       });
     }
+  }
+  if (buttons && buttons.length > 0) {
+    elements.push({
+      tag: 'action',
+      actions: buttons.map(b => ({
+        tag: 'button',
+        text: { tag: 'plain_text', content: b.label },
+        type: b.style ?? 'primary',
+        // Label is stuffed into value so the card.action.trigger handler can
+        // recover both the user-facing label and Claude's payload string.
+        value: { label: b.label, value: b.value },
+      })),
+    });
   }
   return JSON.stringify({
     config: { wide_screen_mode: true, update_multi: true },

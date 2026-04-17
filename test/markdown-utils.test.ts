@@ -4,7 +4,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { parseRow, parseMarkdownSegments, hasMarkdownTable, buildCardJson, normalizeTaskList } from '../markdown-utils.js';
+import { parseRow, parseMarkdownSegments, hasMarkdownTable, buildCardJson, normalizeTaskList, Button } from '../markdown-utils.js';
 
 // ─── parseRow ────────────────────────────────────────────────────────────────
 
@@ -188,6 +188,54 @@ function testBuildCardJsonNormalizesTaskList() {
   console.log('  ✓ buildCardJson normalizes task lists');
 }
 
+// ─── Buttons ─────────────────────────────────────────────────────────────────
+// When buttons are passed, an action element with button children is appended
+// after the text/table segments. The card.action.trigger handler expects
+// value.{label,value} so it can recover both the user-facing label and the
+// payload string Claude used to identify the click.
+
+function testButtons() {
+  const buttons: Button[] = [
+    { label: 'OK', value: 'approve', style: 'primary' },
+    { label: '取消', value: 'cancel' },
+    { label: '删除', value: 'delete', style: 'danger' },
+  ];
+  const card = JSON.parse(buildCardJson(
+    [{ type: 'text', content: '确认执行？' }],
+    buttons,
+  ));
+
+  // 1 markdown element + 1 action element
+  assert.equal(card.elements.length, 2);
+  assert.equal(card.elements[0].tag, 'markdown');
+
+  const action = card.elements[1];
+  assert.equal(action.tag, 'action');
+  assert.equal(action.actions.length, 3);
+
+  // primary style honored
+  assert.equal(action.actions[0].type, 'primary');
+  assert.equal(action.actions[0].text.content, 'OK');
+  assert.deepEqual(action.actions[0].value, { label: 'OK', value: 'approve' });
+
+  // Missing style defaults to primary
+  assert.equal(action.actions[1].type, 'primary');
+
+  // danger style honored
+  assert.equal(action.actions[2].type, 'danger');
+  assert.equal(action.actions[2].value.value, 'delete');
+
+  // Omitting buttons yields no action element
+  const noButtons = JSON.parse(buildCardJson([{ type: 'text', content: 'plain' }]));
+  assert.equal(noButtons.elements.length, 1);
+
+  // Empty buttons array also yields no action element
+  const empty = JSON.parse(buildCardJson([{ type: 'text', content: 'plain' }], []));
+  assert.equal(empty.elements.length, 1);
+
+  console.log('  ✓ buttons');
+}
+
 // ─── Run all ─────────────────────────────────────────────────────────────────
 
 console.log('\nmarkdown-utils:');
@@ -198,4 +246,5 @@ testBuildCardJson();
 testNoFalsePositives();
 testNormalizeTaskList();
 testBuildCardJsonNormalizesTaskList();
+testButtons();
 console.log('All tests passed.\n');
