@@ -334,8 +334,11 @@ async function downloadResource(messageId: string, res: { type: string; fileKey:
     log(`Downloaded ${res.type}: ${localPath} (${buffer.length} bytes)`);
     return localPath;
   } catch (e) {
-    log(`Download failed for ${res.fileKey}:`, e instanceof Error ? e.message : String(e));
-    return '';
+    const reason = (e instanceof Error ? e.message : String(e)).slice(0, 80);
+    log(`Download failed for ${res.fileKey}:`, reason);
+    // Return a marker instead of an empty string so Claude can see the failure
+    // in the channel content and react (e.g. ask the user to re-send).
+    return `[download failed: ${res.fileKey} — ${reason}]`;
   }
 }
 
@@ -357,6 +360,10 @@ async function sendReply(chatId: string, inboundMessageId: string | undefined, t
       return entry.cardMessageId;
     } catch (e) {
       log('patch failed, falling back to new reply:', e instanceof Error ? e.message : String(e));
+      // Orphan cleanup: the ACK card is now stranded in "🤔 思考中" with no
+      // timer left to recover it. Best-effort patch it into a stale marker
+      // so the user sees the failure and expects a new reply below.
+      patchCard(entry.cardMessageId, STALE_CARD).catch(() => { /* already failing */ });
     }
   }
 
@@ -436,6 +443,17 @@ const THINKING_CARD = JSON.stringify({
 const TIMEOUT_CARD = JSON.stringify({
   config: { wide_screen_mode: true, update_multi: true },
   elements: [{ tag: 'markdown', content: '⏱️ Claude 5 分钟内未回复，请重试' }],
+});
+// Shown if sendReply fails to patch an ACK card (e.g. 14-day-edit-window expired,
+// rate limited). Best-effort orphan cleanup so users don't stare at "🤔 思考中".
+const STALE_CARD = JSON.stringify({
+  config: { wide_screen_mode: true, update_multi: true },
+  elements: [{ tag: 'markdown', content: '⚠️ 编辑失败，请看下方新回复' }],
+});
+// Shown when the MCP subprocess is exiting (Claude Code detached, stdin closed).
+const DISCONNECTED_CARD = JSON.stringify({
+  config: { wide_screen_mode: true, update_multi: true },
+  elements: [{ tag: 'markdown', content: '🔌 Claude 会话已断开，此回合被中断' }],
 });
 
 // ─── MCP Server ──────────────────────────────────────────────────────────────
@@ -528,11 +546,12 @@ async function startFeishuWebSocket() {
       const { content, resources } = convertMessage(msg.message_type, msg.content, msg.mentions);
       if (!content.trim()) return;
 
-      // Download resources (files/images)
+      // Download resources (files/images). downloadResource returns either a
+      // local path or a "[download failed: ...]" marker — both are pushed so
+      // Claude has visibility into failures.
       const downloadedPaths: string[] = [];
       for (const res of resources) {
-        const path = await downloadResource(msg.message_id, res);
-        if (path) downloadedPaths.push(path);
+        downloadedPaths.push(await downloadResource(msg.message_id, res));
       }
 
       // Build final content with download paths
@@ -601,6 +620,24 @@ async function startFeishuWebSocket() {
   log('WebSocket connected');
 }
 
+// ─── Shutdown ────────────────────────────────────────────────────────────────
+
+async function gracefulShutdown(reason: string): Promise<never> {
+  log(`shutdown: ${reason}; patching ${pendingAcks.size} pending card(s) to disconnected state`);
+  const patches = Array.from(pendingAcks.values()).map(entry => {
+    clearTimeout(entry.timer);
+    return patchCard(entry.cardMessageId, DISCONNECTED_CARD).catch(() => { /* best-effort */ });
+  });
+  pendingAcks.clear();
+  // 3-second ceiling so a slow network can't block exit indefinitely.
+  await Promise.race([
+    Promise.allSettled(patches),
+    new Promise(resolve => setTimeout(resolve, 3000)),
+  ]);
+  log('shutdown complete');
+  process.exit(0);
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -608,9 +645,11 @@ async function main() {
   await server.connect(transport);
   log('MCP server started, app:', APP_ID);
 
-  // Exit when parent disconnects (stdin closes) — prevents zombie processes
-  process.stdin.on('end', () => { log('stdin closed, exiting'); process.exit(0); });
-  process.stdin.on('error', () => { process.exit(0); });
+  // Exit when parent disconnects (stdin closes) — prevents zombie processes.
+  // Before exit, best-effort patch every live ACK card into a "disconnected"
+  // state so users don't stare at "🤔 思考中" after Claude Code detaches.
+  process.stdin.on('end', () => { void gracefulShutdown('stdin closed'); });
+  process.stdin.on('error', () => { void gracefulShutdown('stdin error'); });
 
   // Probe bot info
   await probeBotInfo();
