@@ -90,7 +90,8 @@ function testBuildCardJson() {
     { type: 'text', content: 'hello world' },
   ]));
   assert.deepEqual(textCard.elements, [{ tag: 'markdown', content: 'hello world' }]);
-  assert.deepEqual(textCard.config, { wide_screen_mode: true });
+  // update_multi: true is required for Feishu message.patch API; wide_screen_mode is cosmetic.
+  assert.deepEqual(textCard.config, { wide_screen_mode: true, update_multi: true });
 
   // Table only
   const tableCard = JSON.parse(buildCardJson([

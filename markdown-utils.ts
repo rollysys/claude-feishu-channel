@@ -84,5 +84,8 @@ export function buildCardJson(segments: Segment[]): string {
       });
     }
   }
-  return JSON.stringify({ config: { wide_screen_mode: true }, elements });
+  return JSON.stringify({
+    config: { wide_screen_mode: true, update_multi: true },
+    elements,
+  });
 }
