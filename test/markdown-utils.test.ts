@@ -14,6 +14,9 @@ function testParseRow() {
   assert.deepEqual(parseRow('|single|'), ['single']);
   assert.deepEqual(parseRow('|  trimmed  |'), ['trimmed']);
   assert.deepEqual(parseRow('no pipes just text'), ['no pipes just text']);
+  // Internal empty cells must be preserved to keep row/header column counts aligned.
+  assert.deepEqual(parseRow('| a | | c |'), ['a', '', 'c']);
+  assert.deepEqual(parseRow('| | b | |'), ['', 'b', '']);
   console.log('  ✓ parseRow');
 }
 

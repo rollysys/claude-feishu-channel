@@ -86,9 +86,15 @@ async function probeBotInfo() {
     };
     botOpenId = res?.bot?.open_id ?? '';
     botName = res?.bot?.app_name ?? '';
+    if (!botOpenId) {
+      log('Bot probe returned no open_id — refusing to start (self-loop guard needs botOpenId to filter bot-authored messages).');
+      process.exit(1);
+    }
     log(`Bot: ${botName} (${botOpenId})`);
   } catch (e) {
-    log('Failed to probe bot info:', e instanceof Error ? e.message : String(e));
+    log('Bot probe failed:', e instanceof Error ? e.message : String(e));
+    log('Refusing to start — cannot guarantee self-loop protection without botOpenId.');
+    process.exit(1);
   }
 }
 
@@ -544,6 +550,10 @@ async function startFeishuWebSocket() {
       try {
         const ackCardId = await sendMessage(msg.chat_id, 'interactive', THINKING_CARD);
         const timer = setTimeout(() => {
+          // sendReply clears the timer + deletes the entry when Claude actually
+          // replies. If the timer callback fires after that (clearTimeout races
+          // a fired callback), skip so we don't overwrite Claude's real reply.
+          if (!pendingAcks.has(msg.message_id)) return;
           pendingAcks.delete(msg.message_id);
           patchCard(ackCardId, TIMEOUT_CARD)
             .then(() => log(`[timeout] patched ACK card ${ackCardId} for inbound ${msg.message_id}`))

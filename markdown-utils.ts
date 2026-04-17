@@ -14,7 +14,14 @@ export interface Button {
 }
 
 export function parseRow(line: string): string[] {
-  return line.split('|').map(c => c.trim()).filter(c => c.length > 0);
+  // Split and trim, then strip AT MOST ONE empty cell at each end (the common
+  // "| a | b | c |" wrapping). Internal empty cells are preserved so that a
+  // row's column count stays aligned with its header — dropping them would
+  // silently shift all subsequent cells left.
+  const cells = line.split('|').map(c => c.trim());
+  const start = cells.length > 0 && cells[0] === '' ? 1 : 0;
+  const end = cells.length > 0 && cells[cells.length - 1] === '' ? cells.length - 1 : cells.length;
+  return cells.slice(start, end);
 }
 
 // Feishu markdown (both post `tag:md` and card `tag:markdown`) does not render
