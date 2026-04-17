@@ -335,23 +335,28 @@ async function downloadResource(messageId: string, res: { type: string; fileKey:
 
 // ─── Outbound: Send/Reply via SDK ────────────────────────────────────────────
 
-async function sendReply(chatId: string, messageId: string | undefined, text: string): Promise<string> {
-  // Detect markdown tables → card mode
-  if (hasMarkdownTable(text)) {
-    const cardJson = buildCardJson(parseMarkdownSegments(text));
-    const card = JSON.parse(cardJson);
-    return messageId
-      ? await replyMessage(messageId, 'interactive', JSON.stringify(card))
-      : await sendMessage(chatId, 'interactive', JSON.stringify(card));
+async function sendReply(chatId: string, inboundMessageId: string | undefined, text: string): Promise<string> {
+  // α flow: all replies are interactive cards so they can be patched. If a
+  // thinking-card is already live for this inbound message, we patch that card
+  // into the final response. Otherwise fall back to a fresh reply/send.
+  const cardJson = buildCardJson(parseMarkdownSegments(normalizeTaskList(text)));
+
+  const entry = inboundMessageId ? pendingAcks.get(inboundMessageId) : undefined;
+  if (entry) {
+    clearTimeout(entry.timer);
+    pendingAcks.delete(inboundMessageId!);
+    try {
+      await patchCard(entry.cardMessageId, cardJson);
+      log(`Patched ACK card ${entry.cardMessageId} for inbound ${inboundMessageId}`);
+      return entry.cardMessageId;
+    } catch (e) {
+      log('patch failed, falling back to new reply:', e instanceof Error ? e.message : String(e));
+    }
   }
 
-  // Regular markdown → post format
-  const postContent = JSON.stringify({
-    zh_cn: { content: [[{ tag: 'md', text: normalizeTaskList(text) }]] },
-  });
-  return messageId
-    ? await replyMessage(messageId, 'post', postContent)
-    : await sendMessage(chatId, 'post', postContent);
+  return inboundMessageId
+    ? await replyMessage(inboundMessageId, 'interactive', cardJson)
+    : await sendMessage(chatId, 'interactive', cardJson);
 }
 
 async function sendMessage(chatId: string, msgType: string, content: string): Promise<string> {
@@ -396,17 +401,36 @@ async function replyMessage(messageId: string, msgType: string, content: string)
   }
 }
 
-async function addReaction(messageId: string, emoji: string = 'OnIt') {
-  try {
-    await client.request({
-      method: 'POST',
-      url: `/open-apis/im/v1/messages/${messageId}/reactions`,
-      data: { reaction_type: { emoji_type: emoji } },
-    });
-  } catch (e) {
-    log('ACK reaction failed:', e instanceof Error ? e.message : String(e));
-  }
+async function patchCard(cardMessageId: string, content: string): Promise<void> {
+  await client.request({
+    method: 'PATCH',
+    url: `/open-apis/im/v1/messages/${cardMessageId}`,
+    data: { content },
+  });
 }
+
+// ─── ACK card lifecycle ──────────────────────────────────────────────────────
+// Every inbound message triggers an immediate "thinking" card. The card's
+// message_id is stored so that when Claude calls feishu_reply, we PATCH the
+// same card into the final response (instead of sending a separate message).
+// If Claude never replies within the timeout, the card is patched into a
+// timeout state so the user is not left staring at a spinner.
+
+interface PendingAck {
+  cardMessageId: string;
+  timer: NodeJS.Timeout;
+}
+const pendingAcks = new Map<string, PendingAck>();
+const ACK_TIMEOUT_MS = 5 * 60 * 1000;
+
+const THINKING_CARD = JSON.stringify({
+  config: { wide_screen_mode: true, update_multi: true },
+  elements: [{ tag: 'markdown', content: '🤔 Claude 正在思考...' }],
+});
+const TIMEOUT_CARD = JSON.stringify({
+  config: { wide_screen_mode: true, update_multi: true },
+  elements: [{ tag: 'markdown', content: '⏱️ Claude 5 分钟内未回复，请重试' }],
+});
 
 // ─── MCP Server ──────────────────────────────────────────────────────────────
 
@@ -514,8 +538,24 @@ async function startFeishuWebSocket() {
       // Track latest message ID
       latestMessageIds.set(msg.chat_id, msg.message_id);
 
-      // ACK reaction
-      addReaction(msg.message_id);
+      // Send "thinking" ACK card and arm a timeout. The card's message_id is
+      // stored in pendingAcks so sendReply can PATCH it in place when Claude
+      // responds, producing the impression of a single evolving message.
+      try {
+        const ackCardId = await sendMessage(msg.chat_id, 'interactive', THINKING_CARD);
+        const timer = setTimeout(() => {
+          pendingAcks.delete(msg.message_id);
+          patchCard(ackCardId, TIMEOUT_CARD)
+            .then(() => log(`[timeout] patched ACK card ${ackCardId} for inbound ${msg.message_id}`))
+            .catch(e => log('timeout patch failed:', e instanceof Error ? e.message : String(e)));
+        }, ACK_TIMEOUT_MS);
+        timer.unref(); // don't hold the event loop open on shutdown
+        pendingAcks.set(msg.message_id, { cardMessageId: ackCardId, timer });
+      } catch (e) {
+        log('ACK card send failed:', e instanceof Error ? e.message : String(e));
+        // Continue to notify Claude even without an ACK card — sendReply will
+        // fall back to a fresh reply in that case.
+      }
 
       log(`[msg] ${msg.chat_type} ${msg.chat_id} from=${senderId} type=${msg.message_type}: ${finalContent.slice(0, 80)}`);
 
